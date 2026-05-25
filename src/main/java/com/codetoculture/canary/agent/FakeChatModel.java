@@ -20,6 +20,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static java.util.regex.Pattern.CASE_INSENSITIVE;
+
 /**
  * Simulates a multi-turn LangChain4j agent loop with deterministic, tool-aware responses.
  *
@@ -31,8 +33,11 @@ public class FakeChatModel implements ChatModel {
     private List<ChatModelListener> listeners = new java.util.ArrayList<>();
     private final List<String> invocationLog = new CopyOnWriteArrayList<>();
 
-    private static final Pattern CUST_ID = Pattern.compile("CUST-[A-Z0-9]+", Pattern.CASE_INSENSITIVE);
-    private static final Pattern TICKET_ID = Pattern.compile("TKT-[0-9]+", Pattern.CASE_INSENSITIVE);
+    private static final String TOOL_RESULT_MARKER = "\u0000";
+    private static final Pattern CUST_ID = Pattern.compile("CUST-[A-Z0-9]+", CASE_INSENSITIVE);
+    private static final Pattern TICKET_ID = Pattern.compile("TKT-[0-9]+", CASE_INSENSITIVE);
+    private static final Pattern TRIAGE_KEYWORDS = Pattern.compile(
+            "\\b(triage|active|critical|dashboard|escalat|prioritize)\\b", CASE_INSENSITIVE);
 
     public void setListeners(List<ChatModelListener> listeners) {
         this.listeners = listeners;
@@ -83,93 +88,88 @@ public class FakeChatModel implements ChatModel {
     private String extractLastUserText(List<ChatMessage> messages) {
         ChatMessage last = messages.get(messages.size() - 1);
         if (last instanceof UserMessage um) {
-            return um.singleText().toLowerCase();
+            return um.singleText();
         }
         if (last instanceof ToolExecutionResultMessage tm) {
-            return "tool_result:" + tm.toolName() + ":" + tm.text();
+            return TOOL_RESULT_MARKER + tm.toolName() + TOOL_RESULT_MARKER + tm.text();
         }
         return "";
     }
 
     private boolean hasToolCallingIntent(String prompt) {
-        if (prompt.startsWith("tool_result:")) return false;
+        if (prompt.startsWith(TOOL_RESULT_MARKER)) return false;
         if (CUST_ID.matcher(prompt).find()) return true;
         if (TICKET_ID.matcher(prompt).find()) return true;
-        if (prompt.contains("triage") || prompt.contains("active")) return true;
+        if (TRIAGE_KEYWORDS.matcher(prompt).find()) return true;
         return false;
     }
 
     private ToolExecutionRequest buildToolExecutionRequest(String prompt) {
-        if (prompt.contains("cust-") && prompt.contains("triage")) {
-            return ToolExecutionRequest.builder()
-                    .id("tool-3").name("listActiveTickets")
-                    .arguments("{\"filterPriority\":\"CRITICAL\"}")
-                    .build();
-        }
-        if (TICKET_ID.matcher(prompt).find()) {
+        boolean hasTriage = TRIAGE_KEYWORDS.matcher(prompt).find();
+        boolean hasTicket = TICKET_ID.matcher(prompt).find();
+        boolean hasCustomer = CUST_ID.matcher(prompt).find();
+
+        // If both a ticket ID and triage intent are present, look up the ticket first
+        if (hasTicket) {
             String ticketId = extractValue(prompt, TICKET_ID);
             return ToolExecutionRequest.builder()
                     .id("tool-1").name("lookupTicket")
                     .arguments("{\"ticketId\":\"" + ticketId + "\"}")
                     .build();
         }
-        if (CUST_ID.matcher(prompt).find()) {
+        if (hasCustomer) {
             String custId = extractValue(prompt, CUST_ID);
+            // If both customer and triage intent, list active tickets for that customer priority
+            if (hasTriage) {
+                return ToolExecutionRequest.builder()
+                        .id("tool-3").name("listActiveTickets")
+                        .arguments("{\"filterPriority\":\"CRITICAL\"}")
+                        .build();
+            }
             return ToolExecutionRequest.builder()
                     .id("tool-2").name("lookupCustomer")
                     .arguments("{\"customerId\":\"" + custId + "\"}")
                     .build();
         }
+        if (hasTriage) {
+            return ToolExecutionRequest.builder()
+                    .id("tool-4").name("listActiveTickets")
+                    .arguments("{\"filterPriority\":\"CRITICAL\"}")
+                    .build();
+        }
         return ToolExecutionRequest.builder()
-                .id("tool-4").name("listActiveTickets")
+                .id("tool-5").name("listActiveTickets")
                 .arguments("{\"filterPriority\":\"CRITICAL\"}")
                 .build();
     }
 
     private String generateFinalResponse(String prompt) {
-        boolean hadToolResult = prompt.startsWith("tool_result:");
-        String userPart = hadToolResult ? prompt.substring("tool_result:".length()) : prompt;
+        boolean hadToolResult = prompt.startsWith(TOOL_RESULT_MARKER);
+        String userPart = prompt;
 
-        // Separate tool name from tool body when there's a tool result.
-        // The tool body should NOT be searched for entity IDs from the original query.
         String toolName = null;
         String bodyPart = null;
         if (hadToolResult) {
-            int colonIdx = userPart.indexOf(':');
-            if (colonIdx > 0) {
-                toolName = userPart.substring(0, colonIdx);
-                bodyPart = userPart.substring(colonIdx + 1);
+            int firstSep = prompt.indexOf(TOOL_RESULT_MARKER);
+            int secondSep = prompt.indexOf(TOOL_RESULT_MARKER, firstSep + 1);
+            if (firstSep >= 0 && secondSep > firstSep) {
+                toolName = prompt.substring(firstSep + 1, secondSep);
+                bodyPart = prompt.substring(secondSep + 1);
+                userPart = toolName + " " + bodyPart;
             }
         }
 
-        // Extract entity IDs ONLY from direct queries (no tool results).
-        // For tool results, the "original query" is the tool name, not the tool body.
-        String origCust = null;
-        String origTicket = null;
+        // For tool results, check body for context-specific responses.
+        // For direct queries (no tool results), extract entity IDs to tailor the response.
         if (!hadToolResult) {
-            origCust = extractValue(userPart, CUST_ID);
-            origTicket = extractValue(userPart, TICKET_ID);
-        }
+            String origCust = extractValue(userPart, CUST_ID);
+            String origTicket = extractValue(userPart, TICKET_ID);
 
-        // Original query had both customer and ticket IDs
-        if (origCust != null && origTicket != null) {
-            return json("ticketId", origTicket, "category", "BUG", "urgency", "IMMEDIATE",
-                    "routing", "Escalate to engineering on-call",
-                    "summary", "ENTERPRISE customer with CRITICAL ticket.");
-        }
-
-        // Original query was just about a customer lookup
-        if (hadToolResult && origCust != null && origTicket == null) {
-            return json("ticketId", origCust, "category", "ACCOUNT_LOOKUP", "urgency", "MEDIUM",
-                    "routing", "Review account tier",
-                    "summary", "Account lookup completed for " + origCust + ".");
-        }
-
-        // Original query was just about a ticket lookup
-        if (hadToolResult && origCust == null && origTicket != null) {
-            return json("ticketId", origTicket, "category", "BILLING", "urgency", "MEDIUM",
-                    "routing", "Assign to billing team",
-                    "summary", "Ticket " + origTicket + " details retrieved.");
+            if (origCust != null && origTicket != null) {
+                return json("ticketId", origTicket, "category", "BUG", "urgency", "IMMEDIATE",
+                        "routing", "Escalate to engineering on-call",
+                        "summary", "ENTERPRISE customer with CRITICAL ticket.");
+            }
         }
 
         // Check tool result body for context-specific responses
@@ -211,8 +211,8 @@ public class FakeChatModel implements ChatModel {
                     "summary", "Based on tool results: critical ticket identified.");
         }
 
-        // Direct query (no tool results)
-        if (prompt.contains("triage") || prompt.contains("active")) {
+        // Direct query (no tool results) — match triage-related keywords
+        if (TRIAGE_KEYWORDS.matcher(prompt).find()) {
             return json("ticketId", "TKT-1004", "category", "BUG",
                     "urgency", TriageResult.Urgency.IMMEDIATE,
                     "routing", "Escalate to engineering on-call",

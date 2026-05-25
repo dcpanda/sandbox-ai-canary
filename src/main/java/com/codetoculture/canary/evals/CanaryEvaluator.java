@@ -4,6 +4,9 @@ import com.codetoculture.canary.agent.CanaryAgent;
 import com.codetoculture.canary.model.TriageResult;
 import org.springframework.stereotype.Service;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
  * Runs a complete canary check against the customer support triage domain.
  *
@@ -48,5 +51,30 @@ public class CanaryEvaluator {
      */
     public TriageResult runTriageDashboard() {
         return agent.ask("Show me the active triage dashboard. What are the critical issues?");
+    }
+
+    /**
+     * Run all scenarios and return a labeled report for model comparison.
+     */
+    public Map<String, TriageResult> runFullSuite() {
+        Map<String, TriageResult> results = new LinkedHashMap<>();
+        results.put("canaryCheck", runCanaryCheck());
+        results.put("customerLookup", runCustomerLookup());
+        results.put("ticketLookup", runTicketLookup());
+        results.put("triageDashboard", runTriageDashboard());
+        return results;
+    }
+
+    /**
+     * Produce a formatted comparison string for the full suite.
+     */
+    public String runFullSuiteReport() {
+        Map<String, TriageResult> results = runFullSuite();
+        StringBuilder sb = new StringBuilder("=== Canary Evaluation Report ===\n");
+        for (Map.Entry<String, TriageResult> entry : results.entrySet()) {
+            sb.append("  ").append(entry.getKey()).append(": ").append(entry.getValue()).append("\n");
+        }
+        sb.append("================================");
+        return sb.toString();
     }
 }

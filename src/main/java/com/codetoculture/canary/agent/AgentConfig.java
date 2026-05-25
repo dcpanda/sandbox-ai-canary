@@ -1,8 +1,7 @@
 package com.codetoculture.canary.agent;
 
-import com.codetoculture.canary.tools.CustomerLookup;
-import com.codetoculture.canary.tools.TicketUpdater;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,6 +42,7 @@ public class AgentConfig {
         return OllamaChatModel.builder()
                 .baseUrl(baseUrl)
                 .modelName(modelName)
+                .responseFormat(ResponseFormat.JSON)
                 .build();
     }
 
@@ -55,24 +55,12 @@ public class AgentConfig {
         return model;
     }
 
-    // ---- Tool beans ----
-
-    @Bean
-    public CustomerLookup customerLookup() {
-        return new CustomerLookup();
-    }
-
-    @Bean
-    public TicketUpdater ticketUpdater() {
-        return new TicketUpdater();
-    }
-
     // ---- Agent bean ----
 
     @Bean
     public CanaryAgent canaryAgent(ChatModel model,
-                                   CustomerLookup customerLookup,
-                                   TicketUpdater ticketUpdater) {
+                                   com.codetoculture.canary.tools.CustomerLookup customerLookup,
+                                   com.codetoculture.canary.tools.TicketUpdater ticketUpdater) {
         return new CanaryAgent(model, customerLookup, ticketUpdater);
     }
 }

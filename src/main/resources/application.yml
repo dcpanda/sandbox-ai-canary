@@ -1,0 +1,17 @@
+canary:
+  model:
+    provider: fake
+
+ollama:
+  base:
+    url: http://localhost:11434
+  model:
+    name: gemma4
+
+openai:
+  api:
+    key: demo
+
+langsmith:
+  tracing: true
+  project: canary-sandbox

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  canary-test:
+  canary-test-current:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,5 +16,71 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
           cache: maven
-      - name: Run Canary Evals
+      - name: Run Canary Evals (pinned version)
         run: mvn test
+
+  canary-test-upgrade:
+    runs-on: ubuntu-latest
+    outputs:
+      latest: ${{ steps.lc4j-version.outputs.latest }}
+      current: ${{ steps.lc4j-version.outputs.current }}
+      should-upgrade: ${{ steps.compare-versions.outputs.should-upgrade }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+      - name: Fetch latest LangChain4j version from Maven Central
+        id: lc4j-version
+        run: |
+          LATEST=$(curl -s "https://repo1.maven.org/maven2/dev/langchain4j/langchain4j-bom/maven-metadata.xml" \
+            | grep -o '<release>[^<]*</release>' | head -1 | sed 's/<release>//;s/<\/release>//')
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          CURRENT=$(grep -oP '<langchain4j\.version>\K[^<]+' pom.xml)
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "Found latest=$LATEST, current=$CURRENT"
+      - name: Compare versions
+        id: compare-versions
+        run: |
+          if [ "${{ steps.lc4j-version.outputs.latest }}" != "${{ steps.lc4j-version.outputs.current }}" ]; then
+            echo "should-upgrade=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should-upgrade=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Update LangChain4j version to latest
+        if: steps.compare-versions.outputs.should-upgrade == 'true'
+        run: |
+          mvn versions:set-property -Dproperty=langchain4j.version \
+            -DnewVersion=${{ steps.lc4j-version.outputs.latest }}
+          echo "Updated langchain4j.version to ${{ steps.lc4j-version.outputs.latest }}"
+      - name: Run Canary Evals (upgrade candidate)
+        if: steps.compare-versions.outputs.should-upgrade == 'true'
+        run: mvn test
+      - name: Create Pull Request for version upgrade
+        id: create-pr
+        if: steps.compare-versions.outputs.should-upgrade == 'true'
+        run: |
+          BRANCH="auto-upgrade/lc4j-${{ steps.lc4j-version.outputs.latest }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add pom.xml
+          git commit -m "chore: bump langchain4j to ${{ steps.lc4j-version.outputs.latest }}"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "Upgrade LangChain4j to ${{ steps.lc4j-version.outputs.latest }}" \
+            --body "Automatic canary detected LangChain4j ${{ steps.lc4j-version.outputs.current }} → ${{ steps.lc4j-version.outputs.latest }}.\n\nAll canary evals passed with the new version." \
+            --label dependencies \
+            --reviewer ${{ github.repository_owner }}
+          echo "PR created for upgrade ${{ steps.lc4j-version.outputs.current }} → ${{ steps.lc4j-version.outputs.latest }}"
+      - name: Report upgrade result
+        if: steps.compare-versions.outputs.should-upgrade == 'true'
+        run: |
+          echo "::notice::LangChain4j upgrade available:" \
+            "${{ steps.lc4j-version.outputs.current }} → ${{ steps.lc4j-version.outputs.latest }}"
+      - name: No upgrade available
+        if: steps.compare-versions.outputs.should-upgrade == 'false'
+        run: echo "LangChain4j ${{ steps.lc4j-version.outputs.current }} is current. No upgrade needed."

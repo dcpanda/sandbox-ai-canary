@@ -1,11 +1,13 @@
 package com.codetoculture.canary.tools;
 
 import java.util.Optional;
+import org.springframework.stereotype.Component;
 
 /**
  * Shared mock data store — each method returns a hardcoded JSON string.
  * This avoids Map.ofEntries null-value issues and ensures deterministic output.
  */
+@Component
 public class MockTicketDatabase {
 
     private static final String TK_TKT1001 = "{\"ticketId\":\"TKT-1001\",\"customerId\":\"CUST-4401\",\"subject\":\"Cannot access account after password reset\",\"status\":\"OPEN\",\"priority\":\"HIGH\",\"category\":\"AUTH\",\"createdAt\":\"2026-05-20T09:15:00Z\",\"description\":\"User reports being locked out after password reset flow.\"}";
@@ -32,12 +34,13 @@ public class MockTicketDatabase {
     }
 
     public Optional<String> findTicketsByCustomer(String customerId) {
-        if (customerId.equals("CUST-4401")) return Optional.of("[" + TK_TKT1001 + "]");
-        if (customerId.equals("CUST-7723")) return Optional.of("[" + TK_TKT1002 + "]");
-        if (customerId.equals("CUST-2290")) return Optional.of("[" + TK_TKT1003 + "]");
-        if (customerId.equals("CUST-5512")) return Optional.of("[" + TK_TKT1004 + "]");
-        if (customerId.equals("CUST-3380")) return Optional.empty();
-        return Optional.empty();
+        switch (customerId) {
+            case "CUST-4401": return Optional.of("[" + TK_TKT1001 + "]");
+            case "CUST-7723": return Optional.of("[" + TK_TKT1002 + "]");
+            case "CUST-2290": return Optional.of("[" + TK_TKT1003 + "]");
+            case "CUST-5512": return Optional.of("[" + TK_TKT1004 + "]");
+            default: return Optional.empty();
+        }
     }
 
     public Optional<String> findCustomerById(String customerId) {
@@ -52,16 +55,19 @@ public class MockTicketDatabase {
     }
 
     public Optional<String> listActiveTickets(String filterPriority) {
-        String active = "[" + TK_TKT1001 + ", " + TK_TKT1004;
-        if (filterPriority == null || filterPriority.isBlank() || filterPriority.equals("CRITICAL")) {
-            return Optional.of(active + " " + TK_TKT1004.substring(0, TK_TKT1004.lastIndexOf("}") + 1) + "]");
+        String prio = (filterPriority != null && !filterPriority.isBlank()) ? filterPriority.toUpperCase() : "";
+        if (prio.isEmpty() || prio.equals("CRITICAL")) {
+            return Optional.of("[" + TK_TKT1001 + "," + TK_TKT1004 + "]");
         }
-        if (filterPriority.equals("HIGH")) return Optional.of("[" + TK_TKT1001 + "]");
-        return Optional.empty();
+        if (prio.equals("HIGH")) return Optional.of("[" + TK_TKT1001 + "]");
+        if (prio.equals("MEDIUM")) return Optional.of("[" + TK_TKT1002 + "]");
+        if (prio.equals("LOW")) return Optional.of("[" + TK_TKT1003 + "," + TK_TKT1005 + "]");
+        return Optional.of("[" + TK_TKT1001 + "," + TK_TKT1004 + "]");
     }
 
     public Optional<String> updateTicketStatus(String ticketId, String newStatus) {
-        String json = findTicketById(ticketId).orElse("{\"error\":\"Not found\"}");
-        return Optional.of(json.replace("\"status\":\"", "\"status\":\"" + newStatus + "\""));
+        String json = findTicketById(ticketId).orElse(null);
+        if (json == null) return Optional.empty();
+        return Optional.of(json.replaceFirst("\"status\"\\s*:\\s*\"[^\"]*\"", "\"status\":\"" + newStatus + "\""));
     }
 }
