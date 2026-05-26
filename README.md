@@ -1,5 +1,7 @@
 # AI Canary Sandbox
 
+[![Autonomous Upgrade Canary](https://img.shields.io/github/actions/workflow/status/dcpanda/sandbox-ai-canary/autonomous-upgrade.yml?branch=main&label=Autonomous%20Upgrade&logo=github)](https://github.com/dcpanda/sandbox-ai-canary/actions/workflows/autonomous-upgrade.yml)
+
 A business-domain AI agent that tests new LLM/library versions with the same tool-calling patterns as your production app.
 
 ## Why this exists

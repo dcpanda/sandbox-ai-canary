@@ -74,6 +74,7 @@ jobs:
           git checkout -b "$BRANCH"
           git add pom.xml
           git commit -m "chore: bump langchain4j to ${{ steps.lc4j-version.outputs.latest }}"
+          git fetch origin
           git push origin "$BRANCH" --force-with-lease
           if gh pr list --head "$BRANCH" --state open 2>/dev/null | grep -q .; then
             echo "PR already exists for $BRANCH, skipping creation"
