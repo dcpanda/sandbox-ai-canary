@@ -65,6 +65,8 @@ jobs:
       - name: Create Pull Request for version upgrade
         id: create-pr
         if: steps.compare-versions.outputs.should-upgrade == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           BRANCH="auto-upgrade/lc4j-${{ steps.lc4j-version.outputs.latest }}"
           git config user.name "github-actions[bot]"
