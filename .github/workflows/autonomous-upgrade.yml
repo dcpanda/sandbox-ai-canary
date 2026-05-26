@@ -74,13 +74,17 @@ jobs:
           git checkout -b "$BRANCH"
           git add pom.xml
           git commit -m "chore: bump langchain4j to ${{ steps.lc4j-version.outputs.latest }}"
-          git push origin "$BRANCH"
-          gh pr create \
-            --title "Upgrade LangChain4j to ${{ steps.lc4j-version.outputs.latest }}" \
-            --body "Automatic canary detected LangChain4j ${{ steps.lc4j-version.outputs.current }} → ${{ steps.lc4j-version.outputs.latest }}.\n\nAll canary evals passed with the new version." \
-            --label dependencies \
-            --reviewer ${{ github.repository_owner }}
-          echo "PR created for upgrade ${{ steps.lc4j-version.outputs.current }} → ${{ steps.lc4j-version.outputs.latest }}"
+          git push origin "$BRANCH" --force-with-lease
+          if gh pr list --head "$BRANCH" --state open 2>/dev/null | grep -q .; then
+            echo "PR already exists for $BRANCH, skipping creation"
+          else
+            gh pr create \
+              --title "Upgrade LangChain4j to ${{ steps.lc4j-version.outputs.latest }}" \
+              --body "Automatic canary detected LangChain4j ${{ steps.lc4j-version.outputs.current }} → ${{ steps.lc4j-version.outputs.latest }}.\n\nAll canary evals passed with the new version." \
+              --label dependencies \
+              --reviewer ${{ github.repository_owner }}
+            echo "PR created for upgrade ${{ steps.lc4j-version.outputs.current }} → ${{ steps.lc4j-version.outputs.latest }}"
+          fi
       - name: Report upgrade result
         if: steps.compare-versions.outputs.should-upgrade == 'true'
         run: |
