@@ -103,12 +103,12 @@ jobs:
       - name: Run Canary Evals (upgrade candidate)
         run: mvn test
 
-      - name: Create Pull Request
+      - name: Create or find Pull Request
         id: create-pr
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          BRANCH="auto-upgrade/$(date +%s)"
+          BRANCH="auto-upgrade/lc4j-${{ needs.check-new-version.outputs.latest-lc4j }}-boot-${{ needs.check-new-version.outputs.latest-boot }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
@@ -133,11 +133,18 @@ jobs:
             TITLE="Upgrade Spring Boot to ${{ needs.check-new-version.outputs.latest-boot }}"
           fi
 
-          gh pr create \
-            --title "$TITLE" \
-            --body "$BODY" \
-            --label dependencies \
-            --reviewer ${{ github.repository_owner }}
+          EXISTING=$(gh pr list --state open --head "$BRANCH" --json url --jq '.[0].url' || true)
+          if [ -n "$EXISTING" ]; then
+            echo "PR already exists: $EXISTING"
+            echo "url=$EXISTING" >> "$GITHUB_OUTPUT"
+          else
+            gh pr create \
+              --title "$TITLE" \
+              --body "$BODY" \
+              --label dependencies \
+              --reviewer ${{ github.repository_owner }}
+            echo "PR created"
+          fi
 
       - name: Report result
         run: |

@@ -146,7 +146,7 @@ This exercises the same contracts that a real LLM provider would — just determ
 The GitHub Actions workflow (`.github/workflows/autonomous-upgrade.yml`) runs daily:
 
 1. **`check-new-version`** — fetches the latest LangChain4j and Spring Boot versions from Maven Central (including RCs), compares with pinned versions
-2. **`upgrade-new-version`** — if an upgrade is found, applies it to `pom.xml`, runs the test suite, and creates a PR
+2. **`upgrade-new-version`** — if an upgrade is found, applies it to `pom.xml`, runs the test suite, and creates a PR (reuses existing open PR if one already exists for the same version bump)
 3. **`canary-test-current`** — runs the full eval suite against the pinned versions (always runs)
 
 ```mermaid
