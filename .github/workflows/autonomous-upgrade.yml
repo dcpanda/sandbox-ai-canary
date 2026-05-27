@@ -30,9 +30,9 @@ jobs:
         id: lc4j
         run: |
           set -euo pipefail
-          LATEST=$(curl -sf "https://repo1.maven.org/maven2/dev/langchain4j/langchain4j-bom/maven-metadata.xml" \
-            | grep -oP '<release>\K[^<]+' \
-            | grep -ivE 'rc|alpha|beta|snapshot' | head -1)
+          RAW_RELEASE=$(curl -sf "https://repo1.maven.org/maven2/dev/langchain4j/langchain4j-bom/maven-metadata.xml" \
+            | grep -oP '<release>\K[^<]+' | head -1)
+          LATEST="$RAW_RELEASE"
           if [ -z "$LATEST" ]; then
             echo "Failed to fetch latest LangChain4j version" >&2
             exit 1
@@ -48,8 +48,7 @@ jobs:
         run: |
           set -euo pipefail
           LATEST=$(curl -sf "https://repo1.maven.org/maven2/org/springframework/boot/spring-boot-dependencies/maven-metadata.xml" \
-            | grep -oP '<latest>\K[^<]+' \
-            | grep -ivE 'RC|rc|alpha|beta|snapshot|milestone|M' | head -1)
+            | grep -oP '<release>\K[^<]+' | head -1)
           if [ -z "$LATEST" ]; then
             echo "Failed to fetch latest Spring Boot version" >&2
             exit 1
