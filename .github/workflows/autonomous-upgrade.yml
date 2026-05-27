@@ -7,16 +7,16 @@ on:
 
 jobs:
   # ── Check: read-only version discovery ──────────────────────────────────
-  check:
+  check-new-version:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       latest-lc4j: ${{ steps.lc4j.outputs.latest }}
       current-lc4j: ${{ steps.lc4j.outputs.current }}
-      should-upgrade-lc4j: ${{ steps.lc4j.outputs.upgrade }}
+      should-upgrade-lc4j: ${{ steps.lc4j.outputs.should-upgrade }}
       latest-boot: ${{ steps.boot.outputs.latest }}
       current-boot: ${{ steps.boot.outputs.current }}
-      should-upgrade-boot: ${{ steps.boot.outputs.upgrade }}
+      should-upgrade-boot: ${{ steps.boot.outputs.should-upgrade }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up JDK 21
@@ -31,7 +31,8 @@ jobs:
         run: |
           set -euo pipefail
           LATEST=$(curl -sf "https://repo1.maven.org/maven2/dev/langchain4j/langchain4j-bom/maven-metadata.xml" \
-            | grep -oP '<release>\K[^<]+' | head -1)
+            | grep -oP '<release>\K[^<]+' \
+            | grep -ivE 'rc|alpha|beta|snapshot' | head -1)
           if [ -z "$LATEST" ]; then
             echo "Failed to fetch latest LangChain4j version" >&2
             exit 1
@@ -47,7 +48,8 @@ jobs:
         run: |
           set -euo pipefail
           LATEST=$(curl -sf "https://repo1.maven.org/maven2/org/springframework/boot/spring-boot-dependencies/maven-metadata.xml" \
-            | grep -oP '<latest>\K[^<]+' | head -1)
+            | grep -oP '<latest>\K[^<]+' \
+            | grep -ivE 'RC|rc|alpha|beta|snapshot|milestone|M' | head -1)
           if [ -z "$LATEST" ]; then
             echo "Failed to fetch latest Spring Boot version" >&2
             exit 1
@@ -59,10 +61,10 @@ jobs:
           echo "Spring Boot: $CURRENT → $LATEST"
 
   # ── Upgrade: write operations (only if check job finds an upgrade) ──────
-  upgrade:
+  upgrade-new-version:
     runs-on: ubuntu-latest
-    needs: check
-    if: ${{ needs.check.outputs.should-upgrade-lc4j == 'true' || needs.check.outputs.should-upgrade-boot == 'true' }}
+    needs: check-new-version
+    if: ${{ needs.check-new-version.outputs.should-upgrade-lc4j == 'true' || needs.check-new-version.outputs.should-upgrade-boot == 'true' }}
     timeout-minutes: 30
     permissions:
       contents: write
@@ -77,20 +79,20 @@ jobs:
           cache: maven
 
       - name: Apply LangChain4j upgrade
-        if: needs.check.outputs.should-upgrade-lc4j == 'true'
+        if: needs.check-new-version.outputs.should-upgrade-lc4j == 'true'
         run: |
           mvn versions:set-property \
             -Dproperty=langchain4j.version \
-            -DnewVersion=${{ needs.check.outputs.latest-lc4j }} -q
-          echo "Updated langchain4j.version to ${{ needs.check.outputs.latest-lc4j }}"
+            -DnewVersion=${{ needs.check-new-version.outputs.latest-lc4j }} -q
+          echo "Updated langchain4j.version to ${{ needs.check-new-version.outputs.latest-lc4j }}"
 
       - name: Apply Spring Boot upgrade
-        if: needs.check.outputs.should-upgrade-boot == 'true'
+        if: needs.check-new-version.outputs.should-upgrade-boot == 'true'
         run: |
           mvn versions:set-property \
             -Dproperty=spring-boot.version \
-            -DnewVersion=${{ needs.check.outputs.latest-boot }} -q
-          echo "Updated spring-boot.version to ${{ needs.check.outputs.latest-boot }}"
+            -DnewVersion=${{ needs.check-new-version.outputs.latest-boot }} -q
+          echo "Updated spring-boot.version to ${{ needs.check-new-version.outputs.latest-boot }}"
 
       - name: Commit version bumps
         run: |
@@ -114,22 +116,22 @@ jobs:
           git push origin "$BRANCH" --force-with-lease
 
           BODY=""
-          if [ "${{ needs.check.outputs.should-upgrade-lc4j }}" == "true" ]; then
-            BODY="${BODY}LangChain4j ${{ needs.check.outputs.current-lc4j }} → ${{ needs.check.outputs.latest-lc4j }}"
+          if [ "${{ needs.check-new-version.outputs.should-upgrade-lc4j }}" == "true" ]; then
+            BODY="${BODY}LangChain4j ${{ needs.check-new-version.outputs.current-lc4j }} → ${{ needs.check-new-version.outputs.latest-lc4j }}"
           fi
-          if [ "${{ needs.check.outputs.should-upgrade-boot }}" == "true" ]; then
-            [ -n "$BODY" ] && BODY="${BODY}$(printf '\n')Spring Boot ${{ needs.check.outputs.current-boot }} → ${{ needs.check.outputs.latest-boot }}"
+          if [ "${{ needs.check-new-version.outputs.should-upgrade-boot }}" == "true" ]; then
+            [ -n "$BODY" ] && BODY="${BODY}$(printf '\n')Spring Boot ${{ needs.check-new-version.outputs.current-boot }} → ${{ needs.check-new-version.outputs.latest-boot }}"
           fi
           BODY="${BODY}$(printf '\n\nAll canary evals passed with the new version.')"
 
           TITLE=""
-          if [ "${{ needs.check.outputs.should-upgrade-lc4j }}" == "true" ] && \
-             [ "${{ needs.check.outputs.should-upgrade-boot }}" == "true" ]; then
+          if [ "${{ needs.check-new-version.outputs.should-upgrade-lc4j }}" == "true" ] && \
+             [ "${{ needs.check-new-version.outputs.should-upgrade-boot }}" == "true" ]; then
             TITLE="Upgrade LangChain4j and Spring Boot"
-          elif [ "${{ needs.check.outputs.should-upgrade-lc4j }}" == "true" ]; then
-            TITLE="Upgrade LangChain4j to ${{ needs.check.outputs.latest-lc4j }}"
+          elif [ "${{ needs.check-new-version.outputs.should-upgrade-lc4j }}" == "true" ]; then
+            TITLE="Upgrade LangChain4j to ${{ needs.check-new-version.outputs.latest-lc4j }}"
           else
-            TITLE="Upgrade Spring Boot to ${{ needs.check.outputs.latest-boot }}"
+            TITLE="Upgrade Spring Boot to ${{ needs.check-new-version.outputs.latest-boot }}"
           fi
 
           gh pr create \
@@ -140,11 +142,11 @@ jobs:
 
       - name: Report result
         run: |
-          if [ "${{ needs.check.outputs.should-upgrade-lc4j }}" == "true" ]; then
-            echo "LangChain4j: ${{ needs.check.outputs.current-lc4j }} → ${{ needs.check.outputs.latest-lc4j }}"
+          if [ "${{ needs.check-new-version.outputs.should-upgrade-lc4j }}" == "true" ]; then
+            echo "LangChain4j: ${{ needs.check-new-version.outputs.current-lc4j }} → ${{ needs.check-new-version.outputs.latest-lc4j }}"
           fi
-          if [ "${{ needs.check.outputs.should-upgrade-boot }}" == "true" ]; then
-            echo "Spring Boot: ${{ needs.check.outputs.current-boot }} → ${{ needs.check.outputs.latest-boot }}"
+          if [ "${{ needs.check-new-version.outputs.should-upgrade-boot }}" == "true" ]; then
+            echo "Spring Boot: ${{ needs.check-new-version.outputs.current-boot }} → ${{ needs.check-new-version.outputs.latest-boot }}"
           fi
 
   # ── Canary test: pinned version (always runs) ──────────────────────────
