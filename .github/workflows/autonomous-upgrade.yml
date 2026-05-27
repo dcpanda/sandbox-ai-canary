@@ -6,91 +6,158 @@ on:
   workflow_dispatch:
 
 jobs:
-  canary-test-current:
+  # ── Check: read-only version discovery ──────────────────────────────────
+  check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      latest-lc4j: ${{ steps.lc4j.outputs.latest }}
+      current-lc4j: ${{ steps.lc4j.outputs.current }}
+      should-upgrade-lc4j: ${{ steps.lc4j.outputs.upgrade }}
+      latest-boot: ${{ steps.boot.outputs.latest }}
+      current-boot: ${{ steps.boot.outputs.current }}
+      should-upgrade-boot: ${{ steps.boot.outputs.upgrade }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up JDK 21
         uses: actions/setup-java@v5
         with:
           java-version: '21'
-          distribution: 'temurin'
+          distribution: temurin
           cache: maven
-      - name: Run Canary Evals (pinned version)
-        run: mvn test
 
-  canary-test-upgrade:
+      - name: Check LangChain4j version
+        id: lc4j
+        run: |
+          set -euo pipefail
+          LATEST=$(curl -sf "https://repo1.maven.org/maven2/dev/langchain4j/langchain4j-bom/maven-metadata.xml" \
+            | grep -oP '<release>\K[^<]+' | head -1)
+          if [ -z "$LATEST" ]; then
+            echo "Failed to fetch latest LangChain4j version" >&2
+            exit 1
+          fi
+          CURRENT=$(grep -oP '<langchain4j\.version>\K[^<]+' pom.xml)
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "should-upgrade=$([ "$LATEST" != "$CURRENT" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "LangChain4j: $CURRENT → $LATEST"
+
+      - name: Check Spring Boot version
+        id: boot
+        run: |
+          set -euo pipefail
+          LATEST=$(curl -sf "https://repo1.maven.org/maven2/org/springframework/boot/spring-boot-dependencies/maven-metadata.xml" \
+            | grep -oP '<latest>\K[^<]+' | head -1)
+          if [ -z "$LATEST" ]; then
+            echo "Failed to fetch latest Spring Boot version" >&2
+            exit 1
+          fi
+          CURRENT=$(grep -oP '<spring-boot\.version>\K[^<]+' pom.xml)
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "should-upgrade=$([ "$LATEST" != "$CURRENT" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "Spring Boot: $CURRENT → $LATEST"
+
+  # ── Upgrade: write operations (only if check job finds an upgrade) ──────
+  upgrade:
     runs-on: ubuntu-latest
+    needs: check
+    if: ${{ needs.check.outputs.should-upgrade-lc4j == 'true' || needs.check.outputs.should-upgrade-boot == 'true' }}
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
-    outputs:
-      latest: ${{ steps.lc4j-version.outputs.latest }}
-      current: ${{ steps.lc4j-version.outputs.current }}
-      should-upgrade: ${{ steps.compare-versions.outputs.should-upgrade }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up JDK 21
         uses: actions/setup-java@v5
         with:
           java-version: '21'
-          distribution: 'temurin'
+          distribution: temurin
           cache: maven
-      - name: Fetch latest LangChain4j version from Maven Central
-        id: lc4j-version
+
+      - name: Apply LangChain4j upgrade
+        if: needs.check.outputs.should-upgrade-lc4j == 'true'
         run: |
-          LATEST=$(curl -s "https://repo1.maven.org/maven2/dev/langchain4j/langchain4j-bom/maven-metadata.xml" \
-            | grep -o '<release>[^<]*</release>' | head -1 | sed 's/<release>//;s/<\/release>//')
-          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
-          CURRENT=$(grep -oP '<langchain4j\.version>\K[^<]+' pom.xml)
-          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
-          echo "Found latest=$LATEST, current=$CURRENT"
-      - name: Compare versions
-        id: compare-versions
+          mvn versions:set-property \
+            -Dproperty=langchain4j.version \
+            -DnewVersion=${{ needs.check.outputs.latest-lc4j }} -q
+          echo "Updated langchain4j.version to ${{ needs.check.outputs.latest-lc4j }}"
+
+      - name: Apply Spring Boot upgrade
+        if: needs.check.outputs.should-upgrade-boot == 'true'
         run: |
-          if [ "${{ steps.lc4j-version.outputs.latest }}" != "${{ steps.lc4j-version.outputs.current }}" ]; then
-            echo "should-upgrade=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should-upgrade=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Update LangChain4j version to latest
-        if: steps.compare-versions.outputs.should-upgrade == 'true'
+          mvn versions:set-property \
+            -Dproperty=spring-boot.version \
+            -DnewVersion=${{ needs.check.outputs.latest-boot }} -q
+          echo "Updated spring-boot.version to ${{ needs.check.outputs.latest-boot }}"
+
+      - name: Commit version bumps
         run: |
-          mvn versions:set-property -Dproperty=langchain4j.version \
-            -DnewVersion=${{ steps.lc4j-version.outputs.latest }}
-          echo "Updated langchain4j.version to ${{ steps.lc4j-version.outputs.latest }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pom.xml
+          git commit -m "chore: bump dependencies" || echo "No changes to commit"
+
       - name: Run Canary Evals (upgrade candidate)
-        if: steps.compare-versions.outputs.should-upgrade == 'true'
         run: mvn test
-      - name: Create Pull Request for version upgrade
+
+      - name: Create Pull Request
         id: create-pr
-        if: steps.compare-versions.outputs.should-upgrade == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          BRANCH="auto-upgrade/lc4j-${{ steps.lc4j-version.outputs.latest }}"
+          BRANCH="auto-upgrade/$(date +%s)"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add pom.xml
-          git commit -m "chore: bump langchain4j to ${{ steps.lc4j-version.outputs.latest }}"
-          git fetch origin
           git push origin "$BRANCH" --force-with-lease
-          if gh pr list --head "$BRANCH" --state open 2>/dev/null | grep -q .; then
-            echo "PR already exists for $BRANCH, skipping creation"
-          else
-            gh pr create \
-              --title "Upgrade LangChain4j to ${{ steps.lc4j-version.outputs.latest }}" \
-              --body "Automatic canary detected LangChain4j ${{ steps.lc4j-version.outputs.current }} → ${{ steps.lc4j-version.outputs.latest }}.\n\nAll canary evals passed with the new version." \
-              --label dependencies \
-              --reviewer ${{ github.repository_owner }}
-            echo "PR created for upgrade ${{ steps.lc4j-version.outputs.current }} → ${{ steps.lc4j-version.outputs.latest }}"
+
+          BODY=""
+          if [ "${{ needs.check.outputs.should-upgrade-lc4j }}" == "true" ]; then
+            BODY="${BODY}LangChain4j ${{ needs.check.outputs.current-lc4j }} → ${{ needs.check.outputs.latest-lc4j }}"
           fi
-      - name: Report upgrade result
-        if: steps.compare-versions.outputs.should-upgrade == 'true'
+          if [ "${{ needs.check.outputs.should-upgrade-boot }}" == "true" ]; then
+            [ -n "$BODY" ] && BODY="${BODY}$(printf '\n')Spring Boot ${{ needs.check.outputs.current-boot }} → ${{ needs.check.outputs.latest-boot }}"
+          fi
+          BODY="${BODY}$(printf '\n\nAll canary evals passed with the new version.')"
+
+          TITLE=""
+          if [ "${{ needs.check.outputs.should-upgrade-lc4j }}" == "true" ] && \
+             [ "${{ needs.check.outputs.should-upgrade-boot }}" == "true" ]; then
+            TITLE="Upgrade LangChain4j and Spring Boot"
+          elif [ "${{ needs.check.outputs.should-upgrade-lc4j }}" == "true" ]; then
+            TITLE="Upgrade LangChain4j to ${{ needs.check.outputs.latest-lc4j }}"
+          else
+            TITLE="Upgrade Spring Boot to ${{ needs.check.outputs.latest-boot }}"
+          fi
+
+          gh pr create \
+            --title "$TITLE" \
+            --body "$BODY" \
+            --label dependencies \
+            --reviewer ${{ github.repository_owner }}
+
+      - name: Report result
         run: |
-          echo "::notice::LangChain4j upgrade available:" \
-            "${{ steps.lc4j-version.outputs.current }} → ${{ steps.lc4j-version.outputs.latest }}"
-      - name: No upgrade available
-        if: steps.compare-versions.outputs.should-upgrade == 'false'
-        run: echo "LangChain4j ${{ steps.lc4j-version.outputs.current }} is current. No upgrade needed."
+          if [ "${{ needs.check.outputs.should-upgrade-lc4j }}" == "true" ]; then
+            echo "LangChain4j: ${{ needs.check.outputs.current-lc4j }} → ${{ needs.check.outputs.latest-lc4j }}"
+          fi
+          if [ "${{ needs.check.outputs.should-upgrade-boot }}" == "true" ]; then
+            echo "Spring Boot: ${{ needs.check.outputs.current-boot }} → ${{ needs.check.outputs.latest-boot }}"
+          fi
+
+  # ── Canary test: pinned version (always runs) ──────────────────────────
+  canary-test-current:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: maven
+      - name: Run Canary Evals (pinned version)
+        run: mvn test

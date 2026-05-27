@@ -145,22 +145,17 @@ This exercises the same contracts that a real LLM provider would — just determ
 
 The GitHub Actions workflow (`.github/workflows/autonomous-upgrade.yml`) runs daily:
 
-1. **`canary-test-current`** — runs the full eval suite against the pinned LangChain4j version as a baseline
-2. **`canary-test-upgrade`** — fetches the latest LangChain4j release from Maven Central, compares with the pinned version, and if different:
-   - Updates `pom.xml` to the new version
-   - Runs the full test suite
-   - Creates a pull request with the version bump and passing test results
+1. **`check`** — fetches the latest LangChain4j and Spring Boot versions from Maven Central, compares with pinned versions
+2. **`upgrade`** — if an upgrade is found, applies it to `pom.xml`, runs the test suite, and creates a PR
+3. **`canary-test-current`** — runs the full eval suite against the pinned versions (always runs)
 
 ```mermaid
-graph LR
-    A[Daily cron] --> B[Test current version]
-    A --> C[Fetch latest LC4j version]
-    C --> D{Newer version?}
-    D -->|No| E[No action]
-    D -->|Yes| F[Update pom.xml]
-    F --> G[Run evals]
-    G -->|Pass| H[Create PR]
-    G -->|Fail| I[Report failure]
+graph TB
+    A[Daily cron] --> B[check]
+    A --> C[canary-test-current]
+    B --> D{Upgrade needed?}
+    D -->|No| E[Done]
+    D -->|Yes| F[upgrade: apply + test + PR]
 ```
 
 ## Design Philosophy
